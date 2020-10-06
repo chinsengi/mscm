@@ -1,0 +1,47 @@
+import copy
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from resnet import ResNet, ResNetBasicBlock
+from generator import Generator
+from torchsummary import summary
+
+class ManifoldLearning(nn.Module):
+    '''
+    chart mapping from manifold to latent space
+    '''
+
+    def __init__(self, nchannels, imsize, manifold_dim):
+        super(ManifoldLearning, self).__init__()
+        self.encoder = ResNet(nchannels, imsize**2, block=ResNetBasicBlock, deepths=[2, 2, 2, 2])
+        self.decoder = Generator(md = manifold_dim, nc = nchannels)
+        self.md = manifold_dim
+
+    def forward(self, x):
+
+        ambient_x = self.encoder(x)
+
+        #project to embedded manifold 
+        latent_x = ambient_x[:, 0:self.md].view(-1,self.md,1,1)
+        loss_embedding = torch.norm(ambient_x[:,self.md:])/(ambient_x.shape[1]-self.md)
+
+        # map the latent representation back to the manifold
+        resx = self.decoder(latent_x)
+
+        # reconstruction loss
+        loss = loss_embedding + nn.MSELoss()(x, resx)
+        return loss, loss_embedding, resx
+
+
+def main():
+    batch_size, channels, height, width = 100, 1, 32, 32
+    inputs = torch.rand(batch_size, channels, height, width)
+    model = ManifoldLearning(channels, height, 100)
+    output = model(inputs)
+    print(output)
+    
+
+if __name__ == '__main__':
+    main()
+    
