@@ -57,12 +57,13 @@ class Generator(nn.Module):
         )
 
     def forward(self, input):
+        input = input.reshape(input.shape[0],-1,1,1)
         return self.main(input)
 
 def main():
     model = Generator()
 
-    summary(model.cuda(), (100,1,1))
+    summary(model.cuda(), (100,1))
 
 if __name__ == "__main__":
     main()

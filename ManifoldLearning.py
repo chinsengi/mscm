@@ -14,16 +14,19 @@ class ManifoldLearning(nn.Module):
 
     def __init__(self, nchannels, imsize, manifold_dim):
         super(ManifoldLearning, self).__init__()
-        self.encoder = ResNet(nchannels, imsize**2, block=ResNetBasicBlock, deepths=[2, 2, 2, 2])
+        self.encoder = ResNet(nchannels, imsize**2, block=ResNetBasicBlock, deepths=[2, 2, 2])
         self.decoder = Generator(md = manifold_dim, nc = nchannels)
         self.md = manifold_dim
+        self.nchannels = nchannels
+        self.imsize = imsize
 
     def forward(self, x):
 
+        x.reshape(x.shape[0], self.nchannels, self.imsize, self.imsize)
         ambient_x = self.encoder(x)
 
         #project to embedded manifold 
-        latent_x = ambient_x[:, 0:self.md].view(-1,self.md,1,1)
+        latent_x = ambient_x[:, 0:self.md]
         loss_embedding = torch.norm(ambient_x[:,self.md:])/(ambient_x.shape[1]-self.md)
 
         # map the latent representation back to the manifold

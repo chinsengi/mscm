@@ -163,7 +163,7 @@ class ResNet(nn.Module):
         return x
 
 def resnet18(in_channels, n_classes):
-    return ResNet(in_channels, n_classes, block=ResNetBasicBlock, deepths=[2, 2, 2, 2])
+    return ResNet(in_channels, n_classes, block=ResNetBasicBlock, deepths=[2, 2, 2])
 
 def resnet34(in_channels, n_classes):
     return ResNet(in_channels, n_classes, block=ResNetBasicBlock, deepths=[3, 4, 6, 3])
@@ -179,6 +179,8 @@ def resnet152(in_channels, n_classes):
 
 def main():
     model = resnet18(1, 32*32)
+    inputs = torch.randn(1,1,64,64)
+    model(inputs)
     summary(model.cuda(), (1, 32, 32))
 
 

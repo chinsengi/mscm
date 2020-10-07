@@ -19,7 +19,7 @@ from torchvision.utils import save_image
 from ManifoldLearning import ManifoldLearning
 import utils
 
-from utils import standard_normal_logprob
+from utils import jacobian
 
 parser = argparse.ArgumentParser('Manifold Score Matching')
 parser.add_argument("--add_noise", type=eval, default=True, choices=[True, False])
@@ -34,9 +34,10 @@ parser.add_argument('--batch_norm', type=eval, default=False, choices=[True, Fal
 parser.add_argument('--residual', type=eval, default=False, choices=[True, False])
 
 parser.add_argument('--batch_size', type=int, default=50)
+parser.add_argument('--batch_size_sm', type=int, default=20)
 parser.add_argument('--lr', type=float, default=1e-4)
 parser.add_argument('--coeff', type=float, default=100)
-parser.add_argument('--manifold_dim', type=int, default=100)
+parser.add_argument('--manifold_dim', type=int, default=10)
 parser.add_argument("--num_epochs", type=int, default=100000)
 parser.add_argument('--test_batch_size', type=int, default=1000)
 parser.add_argument('--weight_decay', type=float, default=1e-5)
@@ -47,6 +48,9 @@ parser.add_argument('--gpu', type=int, default=0)
 parser.add_argument('--pretrain', type=eval, default=False, choices=[True, False])
 parser.add_argument('--res_epoch', type=int, default=1, help='the epoch to resume')
 parser.add_argument('--res_itr', type=int, default=900, help='the iteration to resume')
+parser.add_argument(
+    '--skip_manifold_training', type=eval, default=False, choices=[True, False]
+)
 parser.add_argument('--dim', type=int, default=32)
 parser.add_argument('--autopretrain', type=eval, default=True, choices=[True, False])
 args = parser.parse_args()
@@ -77,10 +81,10 @@ def add_noise(x):
     return x
 #end
 
-def get_train_loader(train_set, epoch):
-    current_batch_size = args.batch_size
+def get_train_loader(train_set, shuffle=True, batch_size=None, ):
+    current_batch_size = batch_size if batch_size != None else args.batch_size
     train_loader = torch.utils.data.DataLoader(
-        dataset=train_set, batch_size=current_batch_size, shuffle=True, drop_last=True, pin_memory=True
+        dataset=train_set, batch_size=current_batch_size, shuffle=shuffle, drop_last=True, pin_memory=True
     )
     logger.info("===> Using batch size {}. Total {} iterations/epoch.".format(current_batch_size, len(train_loader)))
     return train_loader
@@ -160,9 +164,19 @@ def get_dataset(args):
     return train_set, test_loader, data_shape
 #end get_data_set
 
-def compute_loss(args, model, x=None, batch_size=None):
-    pass    
-#end compute_loss
+def hessian(x, mtinv, mt, md):
+    '''
+    This is a helper function 
+    '''
+    ret = torch.zeros(1,md)
+    for i in range(0,md):
+        vjp = torch.autograd.grad(mt[:,i], x, mtinv[i,:], create_graph=True)[0]
+        ret = ret+vjp.detach().cpu()
+        breakpoint()
+    
+    return ret
+
+#endhessian
 
 if __name__ == '__main__':
     #load data 
@@ -171,12 +185,6 @@ if __name__ == '__main__':
     #build model
     model = ManifoldLearning(data_shape[0], data_shape[1], args.manifold_dim)
     model = model.to(device)
-
-    #test the autoencoder
-    # fixed_z = cvt(torch.randn(args.batch_size, 16))
-    # fig_filename = os.path.join(args.save, "figs", "test.jpg")
-    # utils.makedirs(os.path.dirname(fig_filename))
-    # save_image(generated_samples, fig_filename, nrow=10)
 
     # breakpoint()
     # logger.info(model)
@@ -205,99 +213,100 @@ if __name__ == '__main__':
     toy = args.toy
 
     model.train()
-    for epoch in range(1, args.num_epochs + 1):
-        with torch.autograd.set_detect_anomaly(False):
-            train_loader = get_train_loader(train_set, epoch)
-            model.train()
-            for itr, (x,y) in enumerate(train_loader):
+    if args.skip_manifold_training is False:
+        for epoch in range(1, args.num_epochs + 1):
+            with torch.autograd.set_detect_anomaly(False):
+                train_loader = get_train_loader(train_set)
+                model.train()
+                for itr, (x,y) in enumerate(train_loader):
 
-                # cast data and move to device
-                x = cvt(x)
-
-                # grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
-                
-                loss, loss_embedding, reconst = model(x)
-                    
-                optimizer.zero_grad()
-                loss.backward()
-                # for param in model.parameters():
-                #     if param.grad is not None:
-                #         breakpoint()
-                optimizer.step()
-
-                time_meter.update(time.time() - end)
-                # breakpoint()
-                log_message = (
-                        'Iter {} | Time {:.4f}({:.4f}) | loss {}'.format(
-                            str(itr), time_meter.val, time_meter.avg, loss.item()
-                        )
-                    )
-                
-                logger.info(log_message)
-                end = time.time()
-                # breakpoint()
-                if (itr) % args.viz_freq == 0:
-                    # breakpoint()
-                    fig_filename = os.path.join(args.save, "figs", "{}-{:04d}.jpg".format(epoch, itr))
-                    utils.makedirs(os.path.dirname(fig_filename))
-                    save_image(reconst, fig_filename, nrow=10)
-                    torch.save({
-                        'model_state_dict': model.state_dict(),
-                        'optimizer_state_dict': optimizer.state_dict(),
-                        'loss': loss,
-                    }, os.path.join(args.save, 'epoch{}-itr-{}.pth'.format(epoch, itr))) 
-                    lr_scheduler.step()
-
-
-            # compute test loss
-            model.eval()
-            if epoch % args.val_freq == 0:
-                start = time.time()
-                logger.info("validating...")
-                total_loss = 0
-                nitem = 0
-                for itr, (x, y) in enumerate(test_loader):
-                    x.requires_grad = True
+                    # cast data and move to device
                     x = cvt(x)
-                    loss = model(x)[0]
-                    total_loss = total_loss+loss.item()
-                    nitem = nitem + 1
 
-                mloss = total_loss/nitem
-                logger.info("Epoch {:04d} | Time {:.4f}, loss {:.4f}".format(epoch, time.time() - start, mloss))
-                if loss < best_loss:
-                    best_loss = loss
-                    torch.save({
-                        'model_state_dict': model.state_dict(),
-                        'optimizer_state_dict': optimizer.state_dict(),
-                        'loss': loss,
-                    }, os.path.join(args.save, 'epoch{}-itr-1.pth'.format(epoch))) 
+                    # grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                    
+                    loss, loss_embedding, reconst = model(x)
+                        
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+
+                    time_meter.update(time.time() - end)
+                    # breakpoint()
+                    log_message = (
+                            'Iter {} | Time {:.4f}({:.4f}) | loss {}'.format(
+                                str(itr), time_meter.val, time_meter.avg, loss.item()
+                            )
+                        )
+                    
+                    logger.info(log_message)
+                    end = time.time()
+                    # breakpoint()
+                    if (itr) % args.viz_freq == 0:
+                        # breakpoint()
+                        fig_filename = os.path.join(args.save, "figs", "{}-{:04d}.jpg".format(epoch, itr))
+                        utils.makedirs(os.path.dirname(fig_filename))
+                        save_image(reconst, fig_filename, nrow=10)
+                        torch.save({
+                            'model_state_dict': model.state_dict(),
+                            'optimizer_state_dict': optimizer.state_dict(),
+                            'loss': loss,
+                        }, os.path.join(args.save, 'epoch{}-itr-{}.pth'.format(epoch, itr))) 
+                        lr_scheduler.step()
 
 
+                # compute test loss
+                model.eval()
+                if epoch % args.val_freq == 0:
+                    start = time.time()
+                    logger.info("validating...")
+                    total_loss = 0
+                    nitem = 0
+                    for itr, (x, y) in enumerate(test_loader):
+                        x.requires_grad = True
+                        x = cvt(x)
+                        loss = model(x)[0]
+                        total_loss = total_loss+loss.item()
+                        nitem = nitem + 1
 
-        # visualize samples and density
-        # model.eval()
-        # if epoch % args.viz_freq == 0:
-        #     torch.cuda.empty_cache()
-        #     if not toy:
-        #         fixed_z = cvt(torch.randn(args.batch_size, args.dim))
-        #         fig_filename = os.path.join(args.save, "figs", "{:04d}.jpg".format(epoch))
-        #         utils.makedirs(os.path.dirname(fig_filename))
-        #         generated_samples = model.reverse(fixed_z).view(-1, *data_shape)
-        #         save_image(generated_samples, fig_filename, nrow=10)
-        #     else:
-        #         p_samples = toy_data.inf_train_gen(args.tdata, batch_size=2000)
-        #         p_samples /= 4 
-        #         plt.figure(figsize=(9, 3))
-        #         visualize_transform(
-        #             p_samples, torch.randn, standard_normal_logprob, transform=model, inverse_transform=model.reverse,
-        #             samples=True, npts=100, device=device
-        #         )
-        #         fig_filename = os.path.join(args.save, 'figs', '{:04d}.jpg'.format(epoch))
-        #         utils.makedirs(os.path.dirname(fig_filename))
-        #         plt.savefig(fig_filename)
-        #         plt.close()
-        #     model.train()
-    #end
+                    mloss = total_loss/nitem
+                    logger.info("Epoch {:04d} | Time {:.4f}, loss {:.4f}".format(epoch, time.time() - start, mloss))
+                    if loss < best_loss:
+                        best_loss = loss
+                        torch.save({
+                            'model_state_dict': model.state_dict(),
+                            'optimizer_state_dict': optimizer.state_dict(),
+                            'loss': loss,
+                        }, os.path.join(args.save, 'epoch{}-itr-1.pth'.format(epoch))) 
+                    #endif
+                #endif
+            #end
+        #endfor
+    
+    # use the trained manifold mapping to calculate the jacobian and hessian
+    seq_sampler = torch.utils.data.SequentialSampler(train_set)
+    pre_cal_sampler = torch.utils.data.BatchSampler(seq_sampler, 1, False)
+    train_loader = torch.utils.data.BatchSampler(pre_cal_sampler, 20, False)
+    model.encoder.train()
+    model.decoder.train()
+    divergence = []
+    for itr, idx in enumerate(pre_cal_sampler):
+
+        print("processing {}-th sample".format(itr))
+        # cast data and move to device
+        x = cvt(train_set[idx[0]][0])
+        x = x.unsqueeze(0)
+        x = model.encoder(x)[:, 0:model.md]
+        x.requires_grad_(True)
+
+        jac = jacobian(model.decoder(x).view(-1), x, create_graph=True)
+        jac = jac.squeeze()
+        metric_tensor = torch.matmul(jac.t(),jac)
+        mtinv = torch.inverse(metric_tensor.detach())
+        tmp = hessian(x, mtinv, metric_tensor, model.md)
+        divergence.append(tmp)
+    #endfor
+
+    torch.save(torch.stack(divergence), 'divergence_data.pt')
 
     

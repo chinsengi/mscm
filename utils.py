@@ -4,6 +4,7 @@ from numbers import Number
 import logging
 import torch
 import numpy as np 
+import time
 import torch.nn as nn
 
 NONLINEARITIES = {
@@ -147,11 +148,8 @@ def check_dependence(outputs, inputs):
         logger.debug("%s", e)
         return False
 
-
-def calculate_jacobian(outputs, inputs, create_graph=True):
-    """Computes the jacobian of outputs with respect to inputs.
-
-    Based on gelijergensen's code at https://gist.github.com/sbarratt/37356c46ad1350d4c30aefbd488a4faa.
+def jacobian(outputs, inputs, create_graph=False):
+    """Computes the jacobian of outputs with respect to inputs
 
     :param outputs: tensor for the output of some function
     :param inputs: tensor for the input of some function (probably a vector)
@@ -159,9 +157,11 @@ def calculate_jacobian(outputs, inputs, create_graph=True):
     :returns: a tensor of size (outputs.size() + inputs.size()) containing the
         jacobian of outputs with respect to inputs
     """
-    jac = outputs.new_zeros(outputs.size() + inputs.size()).view((-1,) + inputs.size())
-    for i, out in enumerate(outputs.view(-1)):
-        col_i = torch.autograd.grad(out, inputs, retain_graph=True, create_graph=create_graph, allow_unused=True)[0]
+    jac = outputs.new_zeros(outputs.size() + inputs.size()
+                            ).view((-1,) + inputs.size())
+    for i, out in enumerate(outputs.reshape(-1)):
+        col_i = torch.autograd.grad(out, inputs, retain_graph=True,
+                              create_graph=create_graph, allow_unused=True)[0]
         if col_i is None:
             # this element of output doesn't depend on the inputs, so leave gradient 0
             continue
@@ -171,50 +171,7 @@ def calculate_jacobian(outputs, inputs, create_graph=True):
     if create_graph:
         jac.requires_grad_()
 
-    return jac.view(outputs.size() + inputs.size())
-
-
-#
-# def batch_jacobian(outputs, inputs, create_graph=True):
-#     """Computes the jacobian of outputs with respect to inputs, assuming the first dimension of both are the minibatch.
-#
-#     Based on gelijergensen's code at https://gist.github.com/sbarratt/37356c46ad1350d4c30aefbd488a4faa.
-#
-#     :param outputs: tensor for the output of some function
-#     :param inputs: tensor for the input of some function (probably a vector)
-#     :param create_graph: set True for the resulting jacobian to be differentible
-#     :returns: a tensor of size (outputs.size() + inputs.size()) containing the
-#         jacobian of outputs with respect to inputs
-#     """
-#
-#     jacs = []
-#     for input, output in zip(inputs, outputs):
-#         jacs.append(calculate_jacobian(output, input, create_graph).unsqueeze(0))  # DOESN'T WORK
-#     jacs = torch.cat(jacs, 0)
-#     return jacs
-
-
-def batch_jacobian(outputs, inputs, create_graph=True):
-    """Computes the jacobian of outputs with respect to inputs, assuming the first dimension of both are the minibatch.
-
-    Based on gelijergensen's code at https://gist.github.com/sbarratt/37356c46ad1350d4c30aefbd488a4faa.
-
-    :param outputs: tensor for the output of some function
-    :param inputs: tensor for the input of some function (probably a vector)
-    :param create_graph: set True for the resulting jacobian to be differentible
-    :returns: a tensor of size (outputs.size() + inputs.size()) containing the
-        jacobian of outputs with respect to inputs
-    """
-
-    jac = calculate_jacobian(outputs, inputs)
-    jac = jac.view((outputs.size(0), np.prod(outputs.size()[1:]), inputs.size(0), np.prod(inputs.size()[1:])))
-    jac = torch.einsum("bibj->bij", jac)
-
-    if create_graph:
-        jac.requires_grad_()
-
-    return jac
-
+    return jac.view(outputs.size() + inputs.size())                                                                                     
 
 def batch_diagonal(input):
     # idea from here: https://discuss.pytorch.org/t/batch-of-diagonal-matrix/13560
@@ -648,3 +605,5 @@ def is_power_of_two(n):
     else:
         return False
 
+if __name__=="__main__":
+    pass
