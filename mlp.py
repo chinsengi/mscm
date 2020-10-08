@@ -9,7 +9,7 @@ from torch import nn
 class MLP(nn.Module):
     """A standard multi-layer perceptron."""
 
-    def __init__(self, in_shape, out_shape, hidden_sizes, activation=F.relu, activate_output=F.tanh, context_features=None):
+    def __init__(self, in_shape, out_shape, hidden_sizes, activation=torch.tanh, activate_output=torch.tanh, context_features=None):
         """
         Args:
             in_shape: tuple, list or torch.Size, the shape of the input.
@@ -54,3 +54,4 @@ class MLP(nn.Module):
         outputs = outputs.reshape(-1, *self._out_shape)
 
         return outputs
+

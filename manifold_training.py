@@ -17,6 +17,7 @@ from torch.autograd import Variable
 from torchvision.utils import save_image
 
 from ManifoldLearning import ManifoldLearning
+from mlp import MLP
 import utils
 
 from utils import jacobian
@@ -38,19 +39,22 @@ parser.add_argument('--batch_size_sm', type=int, default=20)
 parser.add_argument('--lr', type=float, default=1e-4)
 parser.add_argument('--coeff', type=float, default=100)
 parser.add_argument('--manifold_dim', type=int, default=2)
-parser.add_argument("--num_epochs", type=int, default=100000)
+parser.add_argument("--num_epochs", type=int, default=1000)
 parser.add_argument('--test_batch_size', type=int, default=1000)
 parser.add_argument('--weight_decay', type=float, default=1e-5)
 parser.add_argument('--save', type=str, default='experiments/')
 parser.add_argument('--viz_freq', type=int, default=500)
 parser.add_argument('--val_freq', type=int, default=1)
 parser.add_argument('--gpu', type=int, default=0)
-parser.add_argument('--pretrain', type=eval, default=False, choices=[True, False])
-parser.add_argument('--res_epoch', type=int, default=1, help='the epoch to resume')
-parser.add_argument('--res_itr', type=int, default=900, help='the iteration to resume')
+parser.add_argument('--pretrain1', type=eval, default=False, choices=[True, False])
+parser.add_argument('--pretrain2', type=eval, default=False, choices=[True, False])
+parser.add_argument('--resume1', type=str, default='experiments/epoch-1-1.pth', help='the model data for manifold training resume')
+parser.add_argument('--resume2', type=str, default='experiments/epoch-1-2.pth', help='the model data for score matching to resume')
 parser.add_argument(
-    '--skip_manifold_training', type=eval, default=False, choices=[True, False]
+    '--skip_manifold_training', type=eval, default=True, choices=[True, False]
 )
+parser.add_argument('--skip_score_matching', type=eval, default = True, choices = [True, False])
+parser.add_argument('--pre_cal', type=eval, default=False, choices=[True, False])
 parser.add_argument('--dim', type=int, default=32)
 parser.add_argument('--autopretrain', type=eval, default=True, choices=[True, False])
 args = parser.parse_args()
@@ -169,14 +173,29 @@ def hessian(x, mtinv, mt, md):
     This is a helper function 
     '''
     ret = torch.zeros(1,md)
+    # breakpoint()
     for i in range(0,md):
         vjp = torch.autograd.grad(mt[:,i], x, mtinv[i,:], create_graph=True)[0]
         ret = ret+vjp.detach().cpu()
-        breakpoint()
     
     return ret
-
 #endhessian
+
+def compute_loss(score, latent_x, divergence):
+    firstitr = True
+    for i in range(0, divergence.shape[0]):
+        jac = jacobian(score[i,:], latent_x[i,:], create_graph=True).squeeze()
+        if firstitr:
+            loss = torch.trace(jac)
+            firstitr = False
+        else:
+            loss = loss+torch.trace(jac)
+    #endfor
+    loss = loss/divergence.shape[0]
+    loss = loss + 0.5*torch.mean(divergence@score)
+    loss = loss + torch.mean(torch.norm(score))
+    return loss
+#end
 
 if __name__ == '__main__':
     #load data 
@@ -186,15 +205,14 @@ if __name__ == '__main__':
     model = ManifoldLearning(data_shape[0], data_shape[1], args.manifold_dim)
     model = model.to(device)
 
-    # breakpoint()
-    # logger.info(model)
+    # logger.info(mo    del)
     logger.info("Number of trainable parameters: {}".format(count_parameters(model)))
 
     
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay, amsgrad=True)
     
-    if args.pretrain:
-        checkpt = torch.load(os.path.join(args.save,'epoch{}-itr-{}.pth'.format(args.res_epoch, args.res_itr)))
+    if args.pretrain1:
+        checkpt = torch.load(os.path.join(args.save,args.resume1))
         model.load_state_dict(checkpt['model_state_dict'])
         if "optim_state_dict" in checkpt.keys():
             optimizer.load_state_dict(checkpt["optim_state_dict"])
@@ -210,7 +228,6 @@ if __name__ == '__main__':
 
     end = time.time()
     best_loss = float('inf')
-    toy = args.toy
 
     model.train()
     if args.skip_manifold_training is False:
@@ -243,15 +260,17 @@ if __name__ == '__main__':
                     end = time.time()
                     # breakpoint()
                     if (itr) % args.viz_freq == 0:
-                        # breakpoint()
+                        breakpoint()
                         fig_filename = os.path.join(args.save, "figs", "{}-{:04d}.jpg".format(epoch, itr))
+                        orgfig_filename = os.path.join(args.save, "figs", "{}-{:04d}-1.jpg".format(epoch, itr))
                         utils.makedirs(os.path.dirname(fig_filename))
                         save_image(reconst, fig_filename, nrow=10)
+                        save_image(x,orgfig_filename, nrow = 10 )
                         torch.save({
                             'model_state_dict': model.state_dict(),
                             'optimizer_state_dict': optimizer.state_dict(),
                             'loss': loss,
-                        }, os.path.join(args.save, 'epoch{}-itr-{}.pth'.format(epoch, itr))) 
+                        }, os.path.join(args.save, 'epoch-{}-itr-{}-1.pth'.format(epoch, itr))) 
                         lr_scheduler.step()
 
 
@@ -277,36 +296,141 @@ if __name__ == '__main__':
                             'model_state_dict': model.state_dict(),
                             'optimizer_state_dict': optimizer.state_dict(),
                             'loss': loss,
-                        }, os.path.join(args.save, 'epoch{}-itr-1.pth'.format(epoch))) 
+                        }, os.path.join(args.save, 'epoch-{}-itr-1-1.pth'.format(epoch))) 
                     #endif
                 #endif
             #end
         #endfor
+    #endif
     
-    # use the trained manifold mapping to calculate the jacobian and hessian
-    seq_sampler = torch.utils.data.SequentialSampler(train_set)
-    pre_cal_sampler = torch.utils.data.BatchSampler(seq_sampler, 1, False)
-    train_loader = torch.utils.data.BatchSampler(pre_cal_sampler, 20, False)
-    model.encoder.train()
-    model.decoder.train()
-    divergence = []
-    for itr, idx in enumerate(pre_cal_sampler):
+    # Phase 2 use the trained manifold mapping to calculate the jacobian and hessian
+    model.train()
+    data_exist = True
+    if os.path.exists('divergence_data.pt'):
+        divergence = torch.load('divergence_data.pt')
+        data_precaled = divergence.shape[0]
+        print('{} data points already calculated'.format(data_precaled))
+    else:
+        data_exist = False
+        data_precaled = 0
+    tmp_train_set = [train_set[i] for i in range(data_precaled,len(train_set))]
+    pre_cal_sampler = torch.utils.data.SequentialSampler(tmp_train_set)
+    pre_cal_sampler = torch.utils.data.BatchSampler(pre_cal_sampler, 50, False)
+    if args.pre_cal:
+        for itr, idxs in enumerate(pre_cal_sampler):
+            # cast data and move to device
+            x = cvt(torch.stack([train_set[i][0] for i in idxs]))
+            x = model.encoder(x)[:, 0:model.md]
+            x.requires_grad_(True)
+            for i in range(0,len(idxs)):
+                print("processing {}-th sample".format(data_precaled))
+                xnow = x[i:(i+1),:].requires_grad_()
+                jac = jacobian(model.decoder(xnow).view(-1), xnow, create_graph=True)
+                jac = jac.squeeze()
+                metric_tensor = torch.matmul(jac.t(),jac)
+                mtinv = torch.inverse(metric_tensor.detach())
+                tmp = hessian(xnow, mtinv, metric_tensor, model.md).unsqueeze(0)
+                if data_exist:
+                    divergence = torch.cat([divergence, tmp])
+                else:
+                    divergence = tmp
+                print(metric_tensor)
+                print(tmp)
+                data_precaled = data_precaled+1
+                torch.save(divergence, 'divergence_data.pt')
+            #endfor
+        #endfor
 
-        print("processing {}-th sample".format(itr))
-        # cast data and move to device
-        x = cvt(train_set[idx[0]][0])
-        x = x.unsqueeze(0)
-        x = model.encoder(x)[:, 0:model.md]
-        x.requires_grad_(True)
+    divergence = torch.load('divergence_data.pt')
+    data_precaled = divergence.shape[0]
+    divergence = cvt(divergence)
+    # breakpoint()
 
-        jac = jacobian(model.decoder(x).view(-1), x, create_graph=True)
-        jac = jac.squeeze()
-        metric_tensor = torch.matmul(jac.t(),jac)
-        mtinv = torch.inverse(metric_tensor.detach())
-        tmp = hessian(x, mtinv, metric_tensor, model.md)
-        divergence.append(tmp)
+    # Phase 3 score matching.
+    model2 = MLP([model.md,1], [model.md,1], [128,128,128]).to(device)
+    optimizer = optim.Adam(model2.parameters(), lr=args.lr, weight_decay=args.weight_decay, amsgrad=True)
+    
+    if args.pretrain2:
+        checkpt = torch.load(os.path.join(args.save,args.resume2))
+        model2.load_state_dict(checkpt['model_state_dict'])
+        if "optim_state_dict" in checkpt.keys():
+            optimizer.load_state_dict(checkpt["optim_state_dict"])
+            # Manually move optimizer state to device.
+            for state in optimizer.state.values():
+                for k, v in state.items():
+                    if torch.is_tensor(v):
+                        state[k] = cvt(v)
+
+    
+    lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[1, 2], gamma=0.2)
+    subsest_sampler = torch.utils.data.SubsetRandomSampler([i for i in range(0, data_precaled)])
+    train_loader = torch.utils.data.BatchSampler(subsest_sampler, 20, False)
+
+    time_meter = utils.RunningAverageMeter(0.93)
+    loss_meter = utils.RunningAverageMeter(0.93)
+
+    end = time.time()
+    best_loss = float('inf')
+
+    if args.skip_score_matching is not True:
+        for epoch in range(1, args.num_epochs + 1):
+            with torch.autograd.set_detect_anomaly(False):
+                model2.train()
+                for itr, idxs in enumerate(train_loader):
+
+                    # cast data and move to device
+                    x = torch.stack([train_set[i][0] for i in idxs])
+                    x = cvt(x)
+
+                    # grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                    
+                    # breakpoint()
+                    latent_x = model.encoder(x)[:,0:model.md].unsqueeze(2)
+                    score = model2(latent_x)
+                    loss = compute_loss(score, latent_x, divergence[idxs, :])
+                        
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+
+                    time_meter.update(time.time() - end)
+                    loss_meter.update(loss)
+                    
+                    end = time.time()
+                    # breakpoint()
+                    if itr % args.viz_freq == 0 and epoch % 20 == 0 and loss_meter.avg<best_loss:
+                        best_loss = loss_meter.avg
+                        torch.save({
+                            'model_state_dict': model2.state_dict(),
+                            'optimizer_state_dict': optimizer.state_dict(),
+                            'loss': loss,
+                        }, os.path.join(args.save, 'epoch-{}-itr-{}-2.pth'.format(epoch, itr))) 
+                        lr_scheduler.step()
+                    #endif
+                #endfor
+                log_message = (
+                            'Epoch {} | Time {:.4f}({:.4f}) | loss {}'.format(
+                                str(epoch), time_meter.val, time_meter.avg, loss_meter.avg
+                            )
+                        )                    
+                logger.info(log_message)
+            #end
+        #endfor
+
+    #image generation
+    model2.eval()
+    model.eval()
+    batch_size = 10
+    cur = cvt(torch.randn(batch_size, model.md,1))
+    alp = 0.005
+    maxitr = 200
+    for i in range(1,maxitr):
+        noise = torch.randn(batch_size, model.md,1).to(cur)
+        newimage = cur+model2(cur)*alp + torch.sqrt(alp)*noise
+        newimage = model.decoder(newimage)
+        newimage = model.encoder(newimage)[-1,0:model.md,:]
+        cur = newimage
+        if i%10==0:
+            filename = os.path.join(args.save, 'generate-itr-{}'.format(i))
+            save_image(model.decoder(cur), filename, nrow = 5)
     #endfor
-
-    torch.save(torch.stack(divergence), 'divergence_data.pt')
-
-    

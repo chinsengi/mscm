@@ -13,45 +13,49 @@ import torch.optim as optim
 import torchvision.datasets as dset
 import torchvision.transforms as tforms
 import torch.nn.functional as F
+from torch.autograd import Variable
 from torchvision.utils import save_image
 
-import autoencoder
-import toy_data as toy_data
-import utils as utils
-from visualize_flow import visualize_transform
+from ManifoldLearning import ManifoldLearning
+from mlp import MLP
+import utils
 
-from train_misc import standard_normal_logprob
-from train_misc import build_model_augment
-from bad_grad_viz import register_hooks
-from autoencoder import encoder
+from utils import jacobian
 
-parser = argparse.ArgumentParser('Koopman Flow')
+parser = argparse.ArgumentParser('Manifold Score Matching')
 parser.add_argument("--add_noise", type=eval, default=True, choices=[True, False])
 parser.add_argument("--toy", type=eval, default=False, choices=[True, False])
 parser.add_argument("--data", choices=["mnist", "svhn", "cifar10", 'lsun_church'], type=str, default="mnist")
-parser.add_argument("--imagesize", type=int, default=28)
+parser.add_argument("--imagesize", type=int, default=32)
 parser.add_argument(
-    "--max_grad_norm", type=float, default=1e10,
+    "--max_grad_norm", type=float, default=1e5,
     help="Max norm of graidents (default is just stupidly high to avoid any clipping)"
 )
-parser.add_argument("--depth", type=int, default=5, help='Number of Koopman layers.')
-parser.add_argument("--nonlinearity", type=str, default="tanh", choices=utils.NONLINEARITIES)
-
 parser.add_argument('--batch_norm', type=eval, default=False, choices=[True, False])
 parser.add_argument('--residual', type=eval, default=False, choices=[True, False])
 
 parser.add_argument('--batch_size', type=int, default=50)
-parser.add_argument('--lr', type=float, default=1e-3)
-parser.add_argument('--coeff', type=float, default=10)
+parser.add_argument('--batch_size_sm', type=int, default=20)
+parser.add_argument('--lr', type=float, default=1e-4)
+parser.add_argument('--coeff', type=float, default=100)
+parser.add_argument('--manifold_dim', type=int, default=2)
 parser.add_argument("--num_epochs", type=int, default=100000)
 parser.add_argument('--test_batch_size', type=int, default=1000)
 parser.add_argument('--weight_decay', type=float, default=1e-5)
-parser.add_argument('--save', type=str, default='experiments/cnf')
-parser.add_argument('--viz_freq', type=int, default=200)
+parser.add_argument('--save', type=str, default='experiments/')
+parser.add_argument('--viz_freq', type=int, default=500)
 parser.add_argument('--val_freq', type=int, default=1)
 parser.add_argument('--gpu', type=int, default=0)
-parser.add_argument('--pretrain', type=eval, default=False, choices=[True, False])
-parser.add_argument('--resume', type=int, default=800, help='the epoch to resume')
+parser.add_argument('--pretrain1', type=eval, default=False, choices=[True, False])
+parser.add_argument('--pretrain2', type=eval, default=False, choices=[True, False])
+parser.add_argument('--resume1', type=str, default='experiments/epoch-1-1.pth', help='the model data for manifold training resume')
+parser.add_argument('--resume2', type=str, default='experiments/epoch-1-2.pth', help='the model data for score matching to resume')
+parser.add_argument(
+    '--skip_manifold_training', type=eval, default=True, choices=[True, False]
+)
+parser.add_argument('--pre_cal', type=eval, default=False, choices=[True, False])
+parser.add_argument('--dim', type=int, default=32)
+parser.add_argument('--autopretrain', type=eval, default=True, choices=[True, False])
 args = parser.parse_args()
 
 # logger
@@ -80,10 +84,10 @@ def add_noise(x):
     return x
 #end
 
-def get_train_loader(train_set, epoch):
-    current_batch_size = args.batch_size
+def get_train_loader(train_set, shuffle=True, batch_size=None, ):
+    current_batch_size = batch_size if batch_size != None else args.batch_size
     train_loader = torch.utils.data.DataLoader(
-        dataset=train_set, batch_size=current_batch_size, shuffle=True, drop_last=True, pin_memory=True
+        dataset=train_set, batch_size=current_batch_size, shuffle=shuffle, drop_last=True, pin_memory=True
     )
     logger.info("===> Using batch size {}. Total {} iterations/epoch.".format(current_batch_size, len(train_loader)))
     return train_loader
@@ -163,23 +167,49 @@ def get_dataset(args):
     return train_set, test_loader, data_shape
 #end get_data_set
 
-if __name__ == '__main__':
+def hessian(x, mtinv, mt, md):
+    '''
+    This is a helper function 
+    '''
+    ret = torch.zeros(1,md)
+    # breakpoint()
+    for i in range(0,md):
+        vjp = torch.autograd.grad(mt[:,i], x, mtinv[i,:], create_graph=True)[0]
+        ret = ret+vjp.detach().cpu()
+    
+    return ret
+#endhessian
 
-    #build model
-    model = encoder(args).to(device)
+def compute_loss(score, latent_x, divergence):
+    firstitr = True
+    for i in range(0, divergence.shape[0]):
+        jac = jacobian(score[i,:], latent_x[i,:]).squeeze()
+        if firstitr:
+            loss = torch.trace(jac)
+            firstitr = False
+        else:
+            loss = loss+torch.trace(jac)
+    #endfor
+    loss = loss/divergence.shape[0]
+    print(loss)
+    loss = loss + 0.5*torch.mean(divergence@score)
+    # loss = cvt(loss)
+    return loss
+#end
 
-    logger.info(model)
-    logger.info("Number of trainable parameters: {}".format(count_parameters(model)))
-
+if __name__=='__main__':
     #load data 
-    if args.toy is False:
-        train_set, test_loader, data_shape = get_dataset(args)
+    train_set, test_loader, data_shape = get_dataset(args)
+    divergence = torch.load('divergence_data.pt')
+    data_precaled = divergence.shape[0]
     
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay, amsgrad=True)
+    # Phase 3 score matching.
+    model2 = MLP([model.md,1], [model.md,1], [32,64,128,128,64,32])
+    optimizer = optim.Adam(model2.parameters(), lr=args.lr, weight_decay=args.weight_decay, amsgrad=True)
     
-    if args.pretrain:
-        checkpt = torch.load(os.path.join(args.save,'epoch-{}.pth'.format(args.resume)))
-        model.load_state_dict(checkpt['model_state_dict'])
+    if args.pretrain2:
+        checkpt = torch.load(os.path.join(args.save,args.resume2))
+        model2.load_state_dict(checkpt['model_state_dict'])
         if "optim_state_dict" in checkpt.keys():
             optimizer.load_state_dict(checkpt["optim_state_dict"])
             # Manually move optimizer state to device.
@@ -187,43 +217,57 @@ if __name__ == '__main__':
                 for k, v in state.items():
                     if torch.is_tensor(v):
                         state[k] = cvt(v)
-    # lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[1, 2], gamma=0.2)
-        
+
+    
+    lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[1, 2], gamma=0.2)
+    subsest_sampler = torch.utils.data.SubsetRandomSampler([i for i in range(0, data_precaled)])
+    train_loader = torch.utils.data.BatchSampler(subsest_sampler, 20, False)
+
     time_meter = utils.RunningAverageMeter(0.93)
     loss_meter = utils.RunningAverageMeter(0.93)
 
     end = time.time()
     best_loss = float('inf')
 
-    model.train()
     for epoch in range(1, args.num_epochs + 1):
-        train_loader = get_train_loader(train_set, epoch)
-        model.train()
-        for itr, (x,y) in enumerate(train_loader):
+        with torch.autograd.set_detect_anomaly(False):
+            model2.train()
+            for itr, idxs in enumerate(train_loader):
 
-            # cast data and move to device
-            x = cvt(x)
+                # cast data and move to device
+                x = torch.stack([train_set[i][0] for i in idxs])
+                x = cvt(x)
 
-            optimizer.zero_grad()
-            _, loss = model(x)
-            loss_meter.update(loss.item())
+                # grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                
+                breakpoint()
+                latent_x = model.encoder(x)[:,0:model.md].unsqueeze(2)
+                score = model2(latent_x)
+                loss = compute_loss(score, latent_x, divergence[idxs, :])
+                    
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
 
-            loss.backward()                
-
-            optimizer.step()
-
-            time_meter.update(time.time() - end)
-
-            log_message = (
-                    'Iter {} | Time {:.4f}({:.4f}) | Loss {:.6f}({:.6f})'.format(
-                        str(itr), time_meter.val, time_meter.avg, loss_meter.val, loss_meter.avg
+                time_meter.update(time.time() - end)
+                # breakpoint()
+                log_message = (
+                        'Iter {} | Time {:.4f}({:.4f}) | loss {}'.format(
+                            str(itr), time_meter.val, time_meter.avg, loss.item()
+                        )
                     )
-                )
-            
-            logger.info(log_message)
-            end = time.time()
-            
-       
-    #end
-
-    
+                
+                logger.info(log_message)
+                end = time.time()
+                # breakpoint()
+                if (itr) % args.viz_freq == 0:
+                    torch.save({
+                        'model_state_dict': model.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'loss': loss,
+                    }, os.path.join(args.save, 'epoch-{}-itr-{}-2.pth'.format(epoch, itr))) 
+                    lr_scheduler.step()
+                #endif
+            #endfor
+        #end
+    #endfor
