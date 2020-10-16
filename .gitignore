@@ -2,3 +2,6 @@
 /__pycache__
 /experiments
 *.pt
+*.gif
+*.jpg
+*.png

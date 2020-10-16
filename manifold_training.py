@@ -3,6 +3,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 import argparse
+import math
 import numpy as np
 import os
 import time
@@ -24,6 +25,7 @@ from utils import jacobian
 
 parser = argparse.ArgumentParser('Manifold Score Matching')
 parser.add_argument("--add_noise", type=eval, default=True, choices=[True, False])
+parser.add_argument('--alp', type=float, default=0.001)
 parser.add_argument("--toy", type=eval, default=False, choices=[True, False])
 parser.add_argument("--data", choices=["mnist", "svhn", "cifar10", 'lsun_church'], type=str, default="mnist")
 parser.add_argument("--imagesize", type=int, default=32)
@@ -420,17 +422,20 @@ if __name__ == '__main__':
     #image generation
     model2.eval()
     model.eval()
-    batch_size = 10
+    batch_size = 100
     cur = cvt(torch.randn(batch_size, model.md,1))
-    alp = 0.005
-    maxitr = 200
-    for i in range(1,maxitr):
-        noise = torch.randn(batch_size, model.md,1).to(cur)
-        newimage = cur+model2(cur)*alp + torch.sqrt(alp)*noise
-        newimage = model.decoder(newimage)
-        newimage = model.encoder(newimage)[-1,0:model.md,:]
-        cur = newimage
-        if i%10==0:
-            filename = os.path.join(args.save, 'generate-itr-{}'.format(i))
-            save_image(model.decoder(cur), filename, nrow = 5)
+    alp = args.alp
+    maxitr = 1000
+    with torch.no_grad():
+        for i in range(1,maxitr):
+            noise = torch.randn(batch_size, model.md,1).to(cur)
+            newimage = cur+model2(cur)*alp + math.sqrt(alp)*noise
+            newimage = model.decoder(newimage)
+            # breakpoint()
+            newimage = model.encoder(newimage)[:,0:model.md]
+            cur = newimage.unsqueeze(2)
+            if i%4==0:
+                filename = os.path.join(args.save, 'gif_{}'.format(alp),'generate-itr-{}.jpg'.format(i))
+                utils.makedirs(os.path.dirname(filename))
+                save_image(model.decoder(cur), filename, nrow = 10)
     #endfor
