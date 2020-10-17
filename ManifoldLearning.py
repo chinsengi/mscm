@@ -29,8 +29,8 @@ class ManifoldLearning(nn.Module):
         #project to embedded manifold 
         latent_x = ambient_x[:, 0:self.md]
         loss_embedding = torch.norm(ambient_x[:,self.md:])/(ambient_x.shape[1]-self.md)
-        loss_embedding = loss_embedding-torch.mean(utils.standard_normal_logprob(latent_x))
-
+        loss_embedding = loss_embedding-torch.mean(utils.standard_normal_logprob(latent_x))/100
+        breakpoint()
         # map the latent representation back to the manifold
         resx = self.decoder(latent_x)
 

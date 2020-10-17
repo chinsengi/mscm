@@ -296,11 +296,11 @@ if __name__ == '__main__':
                     mloss = total_loss/nitem
                     logger.info("Epoch {:04d} | Time {:.4f}, loss {:.4f}".format(epoch, time.time() - start, mloss))
                     if mloss < best_loss:
-                        best_loss = loss
+                        best_loss = mloss
                         torch.save({
                             'model_state_dict': model.state_dict(),
                             'optimizer_state_dict': optimizer.state_dict(),
-                            'loss': loss,
+                            'loss': mloss,
                         }, os.path.join(args.save, 'epoch-{}-itr-1-1.pth'.format(epoch))) 
                     #endif
                 #endif
@@ -433,7 +433,7 @@ if __name__ == '__main__':
     batch_size = 100
     cur = cvt(torch.randn(batch_size, model.md,1))
     alp = args.alp
-    maxitr = 1000
+    maxitr = 200
     with torch.no_grad():
         for i in range(1,maxitr):
             noise = torch.randn(batch_size, model.md,1).to(cur)
@@ -442,7 +442,7 @@ if __name__ == '__main__':
             # breakpoint()
             newimage = model.encoder(newimage)[:,0:model.md]
             cur = newimage.unsqueeze(2)
-            if i%4==0:
+            if i%1==0:
                 filename = os.path.join(args.save, 'gif_{}'.format(alp),'generate-itr-{}.jpg'.format(i))
                 utils.makedirs(os.path.dirname(filename))
                 save_image(model.decoder(cur), filename, nrow = 10)
