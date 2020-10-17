@@ -7,6 +7,7 @@ import math
 import numpy as np
 import os
 import time
+import gc
 
 import torch
 import torch.nn as nn
@@ -41,7 +42,7 @@ parser.add_argument('--batch_size_sm', type=int, default=20)
 parser.add_argument('--lr', type=float, default=1e-4)
 parser.add_argument('--coeff', type=float, default=100)
 parser.add_argument('--manifold_dim', type=int, default=2)
-parser.add_argument("--num_epochs", type=int, default=1000)
+parser.add_argument("--num_epochs", type=int, default=100)
 parser.add_argument('--test_batch_size', type=int, default=1000)
 parser.add_argument('--weight_decay', type=float, default=1e-5)
 parser.add_argument('--save', type=str, default='experiments/')
@@ -185,16 +186,21 @@ def hessian(x, mtinv, mt, md):
 
 def compute_loss(score, latent_x, divergence):
     firstitr = True
-    for i in range(0, divergence.shape[0]):
-        jac = jacobian(score[i,:], latent_x[i,:], create_graph=True).squeeze()
+    batch_size = score.shape[0]
+    md = score.shape[1]
+    for i in range(0, batch_size):
+        jac = jacobian(score[i,:], latent_x, create_graph=True).squeeze()[0:md, i, 0:md].squeeze()
         if firstitr:
             loss = torch.trace(jac)
             firstitr = False
         else:
             loss = loss+torch.trace(jac)
-    #endfor
-    loss = loss/divergence.shape[0]
-    loss = loss + 0.5*torch.mean(divergence@score)
+    # endfor
+    if divergence is not None:
+        loss = loss/divergence.shape[0]
+        loss = loss + 0.5*torch.mean(divergence@score)
+    #endif
+    loss = loss - torch.mean(utils.standard_normal_logprob(score))
     loss = loss + torch.mean(torch.norm(score))
     return loss
 #end
@@ -207,7 +213,7 @@ if __name__ == '__main__':
     model = ManifoldLearning(data_shape[0], data_shape[1], args.manifold_dim)
     model = model.to(device)
 
-    # logger.info(mo    del)
+    # logger.info(model)
     logger.info("Number of trainable parameters: {}".format(count_parameters(model)))
 
     
@@ -251,7 +257,6 @@ if __name__ == '__main__':
                     optimizer.step()
 
                     time_meter.update(time.time() - end)
-                    # breakpoint()
                     log_message = (
                             'Iter {} | Time {:.4f}({:.4f}) | loss {}'.format(
                                 str(itr), time_meter.val, time_meter.avg, loss.item()
@@ -262,18 +267,17 @@ if __name__ == '__main__':
                     end = time.time()
                     # breakpoint()
                     if (itr) % args.viz_freq == 0:
-                        breakpoint()
                         fig_filename = os.path.join(args.save, "figs", "{}-{:04d}.jpg".format(epoch, itr))
                         orgfig_filename = os.path.join(args.save, "figs", "{}-{:04d}-1.jpg".format(epoch, itr))
                         utils.makedirs(os.path.dirname(fig_filename))
                         save_image(reconst, fig_filename, nrow=10)
                         save_image(x,orgfig_filename, nrow = 10 )
-                        torch.save({
-                            'model_state_dict': model.state_dict(),
-                            'optimizer_state_dict': optimizer.state_dict(),
-                            'loss': loss,
-                        }, os.path.join(args.save, 'epoch-{}-itr-{}-1.pth'.format(epoch, itr))) 
-                        lr_scheduler.step()
+                        # torch.save({
+                        #     'model_state_dict': model.state_dict(),
+                        #     'optimizer_state_dict': optimizer.state_dict(),
+                        #     'loss': loss,
+                        # }, os.path.join(args.save, 'epoch-{}-itr-{}-1.pth'.format(epoch, itr))) 
+                        # lr_scheduler.step()
 
 
                 # compute test loss
@@ -349,6 +353,9 @@ if __name__ == '__main__':
     # breakpoint()
 
     # Phase 3 score matching.
+    if args.pre_cal is not True:
+        data_precaled = 60000
+
     model2 = MLP([model.md,1], [model.md,1], [128,128,128]).to(device)
     optimizer = optim.Adam(model2.parameters(), lr=args.lr, weight_decay=args.weight_decay, amsgrad=True)
     
@@ -366,7 +373,7 @@ if __name__ == '__main__':
     
     lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[1, 2], gamma=0.2)
     subsest_sampler = torch.utils.data.SubsetRandomSampler([i for i in range(0, data_precaled)])
-    train_loader = torch.utils.data.BatchSampler(subsest_sampler, 20, False)
+    train_loader = torch.utils.data.BatchSampler(subsest_sampler, args.batch_size_sm, False)
 
     time_meter = utils.RunningAverageMeter(0.93)
     loss_meter = utils.RunningAverageMeter(0.93)
@@ -374,10 +381,10 @@ if __name__ == '__main__':
     end = time.time()
     best_loss = float('inf')
 
+    model2.train()
     if args.skip_score_matching is not True:
         for epoch in range(1, args.num_epochs + 1):
             with torch.autograd.set_detect_anomaly(False):
-                model2.train()
                 for itr, idxs in enumerate(train_loader):
 
                     # cast data and move to device
@@ -386,21 +393,22 @@ if __name__ == '__main__':
 
                     # grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
                     
-                    # breakpoint()
                     latent_x = model.encoder(x)[:,0:model.md].unsqueeze(2)
                     score = model2(latent_x)
-                    loss = compute_loss(score, latent_x, divergence[idxs, :])
-                        
+
+                    if args.pre_cal is True:
+                        loss = compute_loss(score, latent_x, divergence[idxs, :])
+                    else:
+                        loss = compute_loss(score, latent_x, None)
                     optimizer.zero_grad()
                     loss.backward()
                     optimizer.step()
 
                     time_meter.update(time.time() - end)
-                    loss_meter.update(loss)
+                    loss_meter.update(loss.item())
                     
                     end = time.time()
-                    # breakpoint()
-                    if itr % args.viz_freq == 0 and epoch % 20 == 0 and loss_meter.avg<best_loss:
+                    if itr % args.viz_freq == 0 and loss_meter.avg<best_loss:
                         best_loss = loss_meter.avg
                         torch.save({
                             'model_state_dict': model2.state_dict(),
@@ -409,13 +417,14 @@ if __name__ == '__main__':
                         }, os.path.join(args.save, 'epoch-{}-itr-{}-2.pth'.format(epoch, itr))) 
                         lr_scheduler.step()
                     #endif
-                #endfor
-                log_message = (
-                            'Epoch {} | Time {:.4f}({:.4f}) | loss {}'.format(
-                                str(epoch), time_meter.val, time_meter.avg, loss_meter.avg
+                    
+                    log_message = (
+                            'Epoch {} Itr {}| Time {:.4f}({:.4f}) | loss {}'.format(
+                                str(epoch), str(itr), time_meter.val, time_meter.avg, loss_meter.avg
                             )
                         )                    
-                logger.info(log_message)
+                    logger.info(log_message)
+                #endfor                
             #end
         #endfor
 
