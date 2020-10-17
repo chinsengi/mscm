@@ -42,7 +42,7 @@ parser.add_argument('--batch_size_sm', type=int, default=20)
 parser.add_argument('--lr', type=float, default=1e-4)
 parser.add_argument('--coeff', type=float, default=100)
 parser.add_argument('--manifold_dim', type=int, default=2)
-parser.add_argument("--num_epochs", type=int, default=100)
+parser.add_argument("--num_epochs", type=int, default=20)
 parser.add_argument('--test_batch_size', type=int, default=1000)
 parser.add_argument('--weight_decay', type=float, default=1e-5)
 parser.add_argument('--save', type=str, default='experiments/')
@@ -200,7 +200,6 @@ def compute_loss(score, latent_x, divergence):
         loss = loss/divergence.shape[0]
         loss = loss + 0.5*torch.mean(divergence@score)
     #endif
-    loss = loss - torch.mean(utils.standard_normal_logprob(score))
     loss = loss + torch.mean(torch.norm(score))
     return loss
 #end
@@ -263,7 +262,7 @@ if __name__ == '__main__':
                             )
                         )
                     
-                    logger.info(log_message)
+                    # logger.info(log_message)
                     end = time.time()
                     # breakpoint()
                     if (itr) % args.viz_freq == 0:
@@ -296,7 +295,7 @@ if __name__ == '__main__':
 
                     mloss = total_loss/nitem
                     logger.info("Epoch {:04d} | Time {:.4f}, loss {:.4f}".format(epoch, time.time() - start, mloss))
-                    if loss < best_loss:
+                    if mloss < best_loss:
                         best_loss = loss
                         torch.save({
                             'model_state_dict': model.state_dict(),
@@ -417,7 +416,7 @@ if __name__ == '__main__':
                         }, os.path.join(args.save, 'epoch-{}-itr-{}-2.pth'.format(epoch, itr))) 
                         lr_scheduler.step()
                     #endif
-                    
+
                     log_message = (
                             'Epoch {} Itr {}| Time {:.4f}({:.4f}) | loss {}'.format(
                                 str(epoch), str(itr), time_meter.val, time_meter.avg, loss_meter.avg

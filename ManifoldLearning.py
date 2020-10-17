@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from resnet import ResNet, ResNetBasicBlock
 from generator import Generator
 from torchsummary import summary
+import utils
 
 class ManifoldLearning(nn.Module):
     '''
@@ -28,6 +29,7 @@ class ManifoldLearning(nn.Module):
         #project to embedded manifold 
         latent_x = ambient_x[:, 0:self.md]
         loss_embedding = torch.norm(ambient_x[:,self.md:])/(ambient_x.shape[1]-self.md)
+        loss_embedding = loss_embedding-torch.mean(utils.standard_normal_logprob(latent_x))
 
         # map the latent representation back to the manifold
         resx = self.decoder(latent_x)
