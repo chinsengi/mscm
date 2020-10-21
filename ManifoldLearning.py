@@ -15,7 +15,7 @@ class ManifoldLearning(nn.Module):
 
     def __init__(self, nchannels, imsize, manifold_dim):
         super(ManifoldLearning, self).__init__()
-        self.encoder = ResNet(nchannels, imsize**2, block=ResNetBasicBlock, deepths=[2, 2, 2])
+        self.encoder = ResNet(nchannels, manifold_dim, block=ResNetBasicBlock, deepths=[2, 2, 2])
         self.decoder = Generator(md = manifold_dim, nc = nchannels)
         self.md = manifold_dim
         self.nchannels = nchannels
@@ -23,20 +23,20 @@ class ManifoldLearning(nn.Module):
 
     def forward(self, x):
 
-        x.reshape(x.shape[0], self.nchannels, self.imsize, self.imsize)
-        ambient_x = self.encoder(x)
+        # x.reshape(x.shape[0], self.nchannels, self.imsize, self.imsize)
+        latent_x = self.encoder(x)
 
         #project to embedded manifold 
-        latent_x = ambient_x[:, 0:self.md]
-        loss_embedding = torch.norm(ambient_x[:,self.md:])/(ambient_x.shape[1]-self.md)
-        loss_embedding = loss_embedding-torch.mean(utils.standard_normal_logprob(latent_x))/100
-        breakpoint()
+        # latent_x = ambient_x[:, 0:self.md]
+        # loss_embedding = torch.norm(ambient_x[:,self.md:])/(ambient_x.shape[1]-self.md)
+        # loss_embedding = loss_embedding-torch.mean(utils.standard_normal_logprob(latent_x))/100
+        # breakpoint()
         # map the latent representation back to the manifold
         resx = self.decoder(latent_x)
 
         # reconstruction loss
-        loss = loss_embedding + nn.MSELoss()(x, resx)
-        return loss, loss_embedding, resx
+        loss = n.MSELoss()(x, resx)
+        return loss, resx, latent_x
 
 
 def main():
