@@ -33,9 +33,8 @@ class ManifoldLearning(nn.Module):
         # breakpoint()
         # map the latent representation back to the manifold
         resx = self.decoder(latent_x)
-
         # reconstruction loss
-        loss = n.MSELoss()(x, resx)
+        loss = nn.MSELoss()(x, resx) + 0.5*(latent_x**2).mean()
         return loss, resx, latent_x
 
 
