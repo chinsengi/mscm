@@ -57,6 +57,7 @@ class Generator(nn.Module):
         )
 
     def forward(self, input):
+        # breakpoint()
         input = input.reshape(input.shape[0],-1,1,1)
         return self.main(input)
 

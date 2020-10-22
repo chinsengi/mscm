@@ -6,6 +6,19 @@ import torch.nn.functional as F
 from .pix2pix import init_net, UnetSkipConnectionBlock, get_norm_layer, init_weights, ResnetBlock, \
     UnetSkipConnectionBlockWithResNet
 
+import sys, os, inspect
+currentdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
+parentdir = os.path.dirname(currentdir)
+sys.path.insert(0, parentdir)
+
+import copy
+import numpy as np
+import torch.nn.functional as F
+from .resnet import ResNet, ResNetBasicBlock
+from .generator import Generator
+from torchsummary import summary
+import utils
+
 
 class ConvResBlock(nn.Module):
     def __init__(self, in_channel, out_channel, resize=False, act='relu'):
@@ -507,4 +520,30 @@ class SmallScore(nn.Module):
             score = self.u_net(x)
         score = self.fc(score.view(x.shape[0], -1)).view(
             x.shape[0], self.config.data.channels, 10, 10)
+        return score
+
+
+class ManifoldMLPScore(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        
+        self.main = nn.Sequential(
+            nn.Linear(self.config.model.manifold_dim, 1024),
+            nn.LayerNorm(1024),
+            nn.ELU(),
+            nn.Linear(1024, 1024),
+            nn.LayerNorm(1024),
+            nn.ELU(),
+            nn.Linear(1024, 512),
+            nn.LayerNorm(512),
+            nn.ELU(),
+            nn.Linear(512, self.config.model.manifold_dim),
+            nn.LayerNorm(self.config.model.manifold_dim)
+        )
+
+    def forward(self, x):
+
+        score = self.main(x)
+
         return score

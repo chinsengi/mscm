@@ -245,6 +245,8 @@ if __name__ == '__main__':
                 for itr, (x,y) in enumerate(train_loader):
 
                     # cast data and move to device
+                    print(x.shape)
+                    breakpoint()
                     x = cvt(x)
 
                     # grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)

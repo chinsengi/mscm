@@ -3,8 +3,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from resnet import ResNet, ResNetBasicBlock
-from generator import Generator
+from models.resnet import ResNet, ResNetBasicBlock
+from models.generator import Generator
 from torchsummary import summary
 import utils
 
