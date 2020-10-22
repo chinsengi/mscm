@@ -122,7 +122,6 @@ class ScoreNetMRunner():
                     latent_X = encoder(X)
                     # breakpoint()
                     rec_X = decoder(latent_X)
-                    breakpoint()
                     loss_sm, *_ = sliced_score_estimation_vr(scaled_score, latent_X.detach(), n_particles=1)
                     loss_rec = ((X-rec_X)**2).mean() + 0.5*(latent_X**2).mean()
                     loss = loss_sm + self.config.training.lbd * loss_rec
@@ -140,8 +139,8 @@ class ScoreNetMRunner():
                 optimizer.step()
 
                 tb_logger.add_scalar('loss', loss, global_step=step)
-                tb_logger.add_scalar('sigma', sigma, global_step=step)
-                logging.info("step: {}, loss: {}, sigma: {}".format(step, loss.item(), sigma))
+                # tb_logger.add_scalar('sigma', sigma, global_step=step)
+                logging.info("step: {}, loss: {}".format(step, loss.item()))
 
                 if step >= self.config.training.n_iters:
                     return 0
@@ -158,9 +157,13 @@ class ScoreNetMRunner():
                         test_X = self.logit_transform(test_X)
 
                     if self.config.training.algo == 'ssm':
-                        test_X += torch.randn_like(test_X) * self.config.training.noise_std
-                        test_loss, *_ = sliced_score_estimation_vr(scaled_score, test_X.detach(), n_particles=1)
+                        test_latent_X = encoder(test_X)
+                        test_rec_X = decoder(test_latent_X)
+                        loss_sm, *_ = sliced_score_estimation_vr(scaled_score, test_latent_X.detach(), n_particles=1)
+                        loss_rec = ((X-rec_X)**2).mean() + 0.5*(latent_X**2).mean()
+                        test_loss = loss_sm + self.config.training.lbd * loss_rec
                     elif self.config.training.algo == 'dsm':
+                        print('Havent implemented yet!')
                         test_loss = dsm_score_estimation(scaled_score, test_X, sigma=self.config.training.noise_std)
 
                     tb_logger.add_scalar('test_loss', test_loss, global_step=step)

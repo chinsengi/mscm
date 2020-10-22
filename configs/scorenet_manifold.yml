@@ -16,7 +16,7 @@ data:
 #  logit_transform: false
   ## celeba
   dataset: "MNIST"
-  image_size: 28
+  image_size: 32
   channels: 1
   logit_transform: false
 
