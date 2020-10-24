@@ -542,7 +542,7 @@ class ManifoldMLPScore(nn.Module):
             nn.LayerNorm(self.config.model.manifold_dim)
         )
 
-    def forward(self, x):
+    def forward(self, x, y=None):
 
         score = self.main(x)
 

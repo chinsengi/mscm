@@ -123,7 +123,7 @@ class ScoreNetMRunner():
                     # breakpoint()
                     rec_X = decoder(latent_X)
                     loss_sm, *_ = sliced_score_estimation_vr(scaled_score, latent_X.detach(), n_particles=1)
-                    loss_rec = ((X-rec_X)**2).mean() + 0.5*(latent_X**2).mean()
+                    loss_rec = ((X-rec_X)**2).mean()  + 0.5*(latent_X**2).mean()
                     loss = loss_sm + self.config.training.lbd * loss_rec
 
 
